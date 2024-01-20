@@ -1,0 +1,160 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  DomainName:
+    Type: String
+    Description: The DNS name of an existing Amazon Route 53 hosted zone
+    AllowedPattern: '(?!-)[a-zA-Z0-9-.]{1,63}(?<!-)'
+    ConstraintDescription: must be a valid DNS zone name.
+  SiteName:
+    Type: String
+    Description: The site name which will be combined with the DomainName value as the S3 bucket name and DNS URL
+    AllowedPattern: '(?!-)[a-zA-Z0-9-.]{1,63}(?<!-)'
+    ConstraintDescription: must be a valid S3 bucket name.
+    Default: console
+  AcmCertificateArn:
+    Type: String
+    Description: The Amazon Resource Name (ARN) of an AWS Certificate Manager (ACM) certificate 
+    AllowedPattern: 'arn:aws:acm:.*'
+    ConstraintDescription: must be a valid ACM ARN.
+Resources:
+  CloudFrontLogBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Join ['', [!Join ['.', [!Ref SiteName, !Ref DomainName]], '-logs']]
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: cleanup
+            Status: Enabled
+            ExpirationInDays: 90
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+
+  S3OriginBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Join ['.', [!Ref SiteName, !Ref DomainName]]
+      AccessControl: Private
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  S3OriginBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref S3OriginBucket
+      PolicyDocument:
+        Id: SPABucketPolicy
+        Version: 2012-10-17
+        Statement:
+          - Sid: DenyUnSecureCommunications
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: !Join ['', ['arn:aws:s3:::', !Ref S3OriginBucket, '/*']]
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'false'
+          - Sid: AllowCloudFrontAccessIdentity
+            Effect: Allow
+            Principal:
+              AWS: !Join [' ', ['arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity', !Ref CloudFrontOriginAccessIdentity]]
+            Action:
+              - 's3:GetObject'
+              - 's3:ListBucket'
+            Resource:
+              - !Join ['', ['arn:aws:s3:::', !Ref S3OriginBucket, '/*']]
+              - !Join ['', ['arn:aws:s3:::', !Ref S3OriginBucket]]
+
+  CloudFrontOriginAccessIdentity:
+    Type: 'AWS::CloudFront::CloudFrontOriginAccessIdentity'
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Join ['', ['access-identity-for-', !Ref SiteName]]
+
+  CloudFront:
+    Type: AWS::CloudFront::Distribution
+    DependsOn:
+      - S3OriginBucket
+      - CloudFrontLogBucket
+    Properties:
+      DistributionConfig:
+        Comment: !Join ['', ['CloudFront origin for S3 bucket: ', !Ref S3OriginBucket]]
+        Origins:
+          - DomainName: !GetAtt S3OriginBucket.RegionalDomainName
+            Id: !Join ['-', ['S3', !Ref S3OriginBucket]]
+            S3OriginConfig:
+              OriginAccessIdentity: !Join ['', ['origin-access-identity/cloudfront/', !Ref CloudFrontOriginAccessIdentity]]
+        CustomErrorResponses:
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /404.html
+        Enabled: true
+        HttpVersion: 'http2and3'
+        DefaultRootObject: 'index.html'
+        Aliases:
+          - !Join ['.', [!Ref SiteName, !Ref DomainName]]
+          - !Ref DomainName
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - POST
+            - HEAD
+            - DELETE
+            - OPTIONS
+            - PUT
+            - PATCH
+          Compress: true
+          TargetOriginId: !Join ['-', ['S3', !Ref S3OriginBucket]]
+          ForwardedValues:
+            QueryString: true
+            Cookies:
+              Forward: none
+          ViewerProtocolPolicy: redirect-to-https
+        PriceClass: PriceClass_100
+        Logging:
+          Bucket: !GetAtt CloudFrontLogBucket.DomainName
+          IncludeCookies: false
+        ViewerCertificate:
+          AcmCertificateArn: !Ref AcmCertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2018
+
+  WebsiteDNSName:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneName: !Join ['', [!Ref 'DomainName', .]]
+      RecordSets:
+        - Name: !Join ['.', [!Ref SiteName, !Ref DomainName]]
+          Type: A
+          AliasTarget:
+            HostedZoneId: Z2FDTNDATAQYW2 # hardcoded to be the hosted zone id for ALL CF distribution https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-route53-aliastarget-1.html
+            DNSName: !GetAtt CloudFront.DomainName
+
+  WebsiteApexDNSName:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneName: !Join ['', [!Ref 'DomainName', .]]
+      RecordSets:
+        - Name: !Ref DomainName
+          Type: A
+          AliasTarget:
+            HostedZoneId: Z2FDTNDATAQYW2 # hardcoded to be the hosted zone id for ALL CF distribution https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-route53-aliastarget-1.html
+            DNSName: !GetAtt CloudFront.DomainName
+
+
+Outputs:
+  BucketName:
+    Value: !Ref S3OriginBucket
+    Description: Name of S3 bucket to hold website content
+  CloudFrontDistributionId:
+    Value: !Ref CloudFront
+    Description: Id for CloudFront distribution
+  CloudFrontEndpoint:
+    Value: !GetAtt CloudFront.DomainName
+    Description: Endpoint for CloudFront distribution

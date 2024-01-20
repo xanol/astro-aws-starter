@@ -1,0 +1,16 @@
+{
+  "Parameters": [
+    {
+      "ParameterKey": "DomainName",
+      "ParameterValue": "some-domainname.com"
+    },
+    {
+      "ParameterKey": "SiteName",
+      "ParameterValue": "www"
+    },
+    {
+      "ParameterKey": "AcmCertificateArn",
+      "ParameterValue": "arn:aws:acm:us-east-1:111111111111:certificate/aaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    }
+  ]
+}

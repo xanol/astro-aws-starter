@@ -1,0 +1,29 @@
+name: AWS deploy
+# on:
+#   push
+env:
+  AWS_REGION : us-east-2
+permissions:
+  id-token: write   # This is required for requesting the JWT
+  contents: read    # This is required for actions/checkout
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Git clone the repository
+        uses: actions/checkout@v4
+      - name: configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          role-to-assume: arn:aws:iam::111111111111:role/github-actions-role
+          role-session-name: github_action_session
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Install deps
+        run: |
+          npm ci
+      - name: Build
+        run: |
+          npm run build
+      - name: Deploy
+        run: |
+          npm run deploy
